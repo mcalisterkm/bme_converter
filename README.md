@@ -1,4 +1,4 @@
-# Bosch Sensortec BME to Excel Converter
+# BME6XX Data files to Excel Converter
 
 Convert Bosch Sensortec BME raw data files (`.bmerawdata`) and label information files (`.bmelabelinfo`) to formatted Excel spreadsheets.
 
