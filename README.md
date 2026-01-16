@@ -41,7 +41,7 @@ On most systems today you will need to create a virtual env
  $ python3 -m venv --system-site-packages <name>
  $ cd <name>
  $ source bin/activate
- <name> $ pip install -q pandas openpyxl
+ <name> $ pip install -r requirements.txt
  ```
  Replace <name> with youir own label e.g. dconv
  The pip install will be local to your venv.
