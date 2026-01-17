@@ -1,5 +1,10 @@
 # Bosch Sensortec BME to Excel/CSV Converter
 
+![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
+![Status](https://img.shields.io/badge/status-active-success.svg)
+
 Convert Bosch Sensortec BME raw data files to formatted Excel spreadsheets or CSV files.
 
 Supports multiple BME file formats:
