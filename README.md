@@ -43,7 +43,6 @@ Supports multiple BME file formats:
 - ✓ Extract sensor measurements from packed binary data
 - ✓ Generate properly formatted .bmerawdata JSON structure
 - ✓ Compatible with existing `bme_converter.py` Excel converter
-- ✓ Enables full Excel conversion pipeline for BME690 data
 - ✓ Handles Application Board 3.1/BME690's lack of RTC (all timestamps relative to power-on)
 
 ## Installation
