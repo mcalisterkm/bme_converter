@@ -220,7 +220,7 @@ The `.udf` binary data consists of 61-byte packed records with the following fie
 | Offset | Bytes | Field | Type | Description |
 |--------|-------|-------|------|-------------|
 | 0-1 | 2 | Marker | u16 | Record marker (0x00FF) |
-| 2-9 | 8 | Time Since PowerOn | u64 | Nanoseconds since power-on (divide by 1,000,000 for ms) |
+| 2-9 | 8 | Time Since PowerOn | u64 | Milliseconds since power-on |
 | 10-13 | 4 | Real Time Clock | u32 | Unix timestamp (always 0 for BME690 - no RTC) |
 | 12 | 1 | Heater Profile Step | u8 | Profile step index (0-9) |
 | 15-18 | 4 | Gas Resistance | float | Ohms (raw sensor measurement) |
