@@ -90,8 +90,8 @@ Six files make up this package:
 
 ### Input Data
 The tool will look for the following input files
-- .bmeconfig  # always needed
-- .bmelabelinfo # always needed
+- .bmeconfig  # board configuration, always needed
+- .bmelabelinfo # session labels, always needed
 - .bmerawdata # required for excel conversion
 - .udf # required for csv and .bmerawdata conversion
 
