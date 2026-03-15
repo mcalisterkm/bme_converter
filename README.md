@@ -88,6 +88,13 @@ Six files make up this package:
 - **bme_udf_to_csv_converter.py** - Binary .udf file to CSV converter
 - **bme_udf_to_rawdata.py** - Binary .udf file to .bmerawdata JSON converter
 
+### Input Data
+The tool will look for the following input files
+- .bmeconfig  # always needed
+- .bmelabelinfo # always needed
+- .bmerawdata # required for excel conversion
+- .udf # required for csv and .bmerawdata conversion
+
 ## Usage
 
 ### Convert JSON Format Files (`.bmerawdata`)
