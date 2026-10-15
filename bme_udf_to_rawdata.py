@@ -12,6 +12,19 @@ from typing import Dict, List, Any, Optional, Tuple
 import argparse
 import sys
 
+from bme_board_config_reader import BoardConfigReader
+from bme_model import (
+    DataColumn,
+    LabelModel,
+    MeasurementModel,
+    SessionModel,
+    VersionMetadata,
+)
+from bme_processor import BMEDataProcessor
+from bme_rawdata_writer import BMERawDataWriter
+from bme_udf_container import UDFContainerReader
+from bme_validation import validate_session
+
 
 class UDFToRawDataConverter:
     """Converter from .udf binary format to .bmerawdata JSON format"""
@@ -154,52 +167,12 @@ class UDFToRawDataConverter:
         Returns:
             Tuple of (version, field_definitions, binary_data)
         """
-        with open(self.udf_path, 'rb') as f:
-            content = f.read()
-        
-        # Find metadata delimiter
-        delimiter = b'\r\n\r\n\r\n'
-        delim_pos = content.find(delimiter)
-        
-        if delim_pos == -1:
-            raise ValueError("Could not find metadata delimiter in UDF file")
-        
-        # Parse metadata
-        metadata = content[:delim_pos].decode('utf-8', errors='ignore')
-        self.binary_data = content[delim_pos + len(delimiter):]
-        
-        # Parse metadata fields
-        self.udf_version, self.udf_fields = self._parse_metadata(metadata)
+        container = UDFContainerReader().read(str(self.udf_path))
+        self.udf_version = container.version
+        self.udf_fields = container.fields
+        self.binary_data = container.binary_data
         
         return self.udf_version, self.udf_fields, self.binary_data
-    
-    def _parse_metadata(self, metadata: str) -> Tuple[str, List[Dict]]:
-        """Parse metadata section to extract field definitions"""
-        import re
-        
-        lines = [l.strip() for l in metadata.split('\n') if l.strip()]
-        version = lines[0] if lines else "unknown"
-        
-        fields = []
-        # Format: ID: Name: Size: Type: Flags: Val1: Val2: Status
-        field_pattern = re.compile(r'^(\d+):\s*([^:]+):\s*(\d+):\s*([^:]+):')
-        
-        for line in lines[1:]:
-            match = field_pattern.match(line)
-            if match:
-                field_id = int(match.group(1))
-                name = match.group(2).strip()
-                size = int(match.group(3))
-                type_spec = match.group(4).strip()
-                
-                fields.append({
-                    'id': field_id,
-                    'name': name,
-                    'size': size,
-                    'type': type_spec
-                })
-        
-        return version, fields
     
     def extract_records(self) -> List[List[Any]]:
         """
@@ -502,6 +475,52 @@ class UDFToRawDataConverter:
         }
         
         return rawdata
+
+    def read_session(self) -> SessionModel:
+        """Decode collection UDF data into the canonical session model."""
+        rawdata = self.convert()
+        labelinfo = self.labelinfo_data or {}
+        column_definitions = rawdata["rawDataBody"]["dataColumns"]
+        label_lookup = BMEDataProcessor.create_label_lookup(labelinfo)
+        data = BMEDataProcessor.create_dataframe(
+            rawdata["rawDataBody"]["dataBlock"],
+            column_definitions,
+            label_lookup,
+        )
+        data = BMEDataProcessor.format_column_by_type(data, column_definitions)
+
+        board_config = BoardConfigReader.from_document(rawdata)
+        config_header = board_config.header
+        label_model = None
+        if labelinfo:
+            label_model = LabelModel(
+                labels=labelinfo.get("labelInformation", []),
+                header=labelinfo.get("labelInfoHeader", {}),
+                raw=labelinfo,
+            )
+
+        session = SessionModel(
+            board_config=board_config,
+            measurements=MeasurementModel(
+                data=data,
+                columns=[
+                    DataColumn.from_dict(column, index)
+                    for index, column in enumerate(column_definitions)
+                ],
+            ),
+            labels=label_model,
+            raw_data_header=rawdata["rawDataHeader"],
+            versions=VersionMetadata(
+                udf_version=self.udf_version,
+                app_version=config_header.get("appVersion"),
+                firmware_version=rawdata["rawDataHeader"].get("firmwareVersion"),
+            ),
+            source_path=self.udf_path,
+            source_format="collection_udf",
+            raw_document=rawdata,
+        )
+        validate_session(session)
+        return session
     
     def save(self, output_path: Optional[str] = None) -> str:
         """
@@ -518,14 +537,8 @@ class UDFToRawDataConverter:
         
         output_path = Path(output_path)
         
-        # Perform conversion
-        rawdata = self.convert()
-        
-        # Write JSON file with formatting matching Bosch files
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(rawdata, f, indent='\t')
-        
-        return str(output_path)
+        session = self.read_session()
+        return BMERawDataWriter().write(session, str(output_path))
 
 
 def main():

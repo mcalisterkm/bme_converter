@@ -43,6 +43,7 @@ Supports multiple BME file formats:
 - ✓ Extract sensor measurements from packed binary data
 - ✓ Generate properly formatted .bmerawdata JSON structure
 - ✓ Compatible with existing `bme_converter.py` Excel converter
+- ✓ Enables full Excel conversion pipeline for BME690 data
 - ✓ Handles Application Board 3.1/BME690's lack of RTC (all timestamps relative to power-on)
 
 ## Installation
@@ -52,16 +53,6 @@ Supports multiple BME file formats:
 - pandas
 - openpyxl
 
-### Install n/pip3Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-Or manually:
-```bash
-pip install pandas openpyxl
-```
 ### Virtual environment
 
 On most systems today you will need to create a virtual env
@@ -78,26 +69,12 @@ On most systems today you will need to create a virtual env
  ```
  <name>$ deactivate
 ```
-### Python files
- 
-Six files make up this package:
-- **bme_converter.py** - Main CLI for JSON format (.bmerawdata) conversion to Excel
-- **bme_processor.py** - Data processing and formatting
-- **bme_parser.py** - JSON file parser
-- **bme_excel_writer.py** - Excel workbook generator
-- **bme_udf_to_csv_converter.py** - Binary .udf file to CSV converter
-- **bme_udf_to_rawdata.py** - Binary .udf file to .bmerawdata JSON converter
+If you are not using a virtual environment then the dependencies can be installed globally as raspbian packages using the command: apt install <pkg>. The package names are python3-openpyzl and python3-pandas, however these versions wll not as up to date as using pip to install into a virtual environment. 
 
-### Input Data
-The tool will look for the following input files
-- .bmeconfig  # board configuration, always needed
-- .bmelabelinfo # session labels, always needed
-- .bmerawdata # required for excel conversion
-- .udf # required for csv and .bmerawdata conversion
 
 ## Usage
 
-### Convert JSON Format Files (`.bmerawdata`)
+### Convert bmerawdata JSON Format Files to Excel (`.bmerawdata` →  `.xlsx`)
 
 #### Convert Single File
 
@@ -135,9 +112,7 @@ python bme_converter.py --dir /path/to/data
 
 This creates one Excel file for each `.bmerawdata` file found.
 
-### Convert Binary UDF Files (`.udf`)
-
-#### Basic Conversion
+### Convert Binary UDF Files to CSV (`.udf` → `.csv`)
 
 Convert a `.udf` binary file to CSV:
 
@@ -191,7 +166,7 @@ python bme_udf_to_rawdata.py bme_690_data_2.udf -v
 
 #### Use Case
 
-The BME690 devkit creates `.udf` files due to limited filesystem space, while the BME688 devkit with SD card stores data directly in `.bmerawdata` format. This converter bridges the gap, allowing you to:
+The BME690 devkit creates `.udf` files due to limited filesystem space, while the BME688 devkit with SD card stores data directly in `.bmerawdata` format. This converter bridges the gap, allowing the user to:
 
 1. Convert BME690 `.udf` → `.bmerawdata`
 2. Then convert `.bmerawdata` → Excel using `bme_converter.py`
@@ -206,6 +181,56 @@ python bme_converter.py 690-data.bmerawdata
 ```
 
 **Note:** The BME690 devkit (appboard 3.1 + 8x 690 shuttleboard) has no real-time clock, so all timestamps are relative to power-on (Real time clock field = 0).
+
+### Python files
+ 
+The collection conversion pipeline is split into parsing, normalization, and
+export:
+- **bme_converter.py** - Main CLI for JSON format (.bmerawdata) conversion to Excel
+- **bme_model.py** - Canonical in-memory models for collection sessions
+- **bme_board_config_reader.py** - Normalizes standalone and embedded board configuration
+- **bme_validation.py** - Validates canonical collection sessions
+- **bme_session_reader.py** - Normalizes `.bmerawdata` files into the canonical model
+- **bme_processor.py** - Data processing and formatting
+- **bme_parser.py** - JSON file parser
+- **bme_excel_writer.py** - Excel workbook generator
+- **bme_udf_parser.py** - Collection UDF parser adapter
+- **bme_udf_container.py** - Generic UDF metadata and binary payload reader
+- **bme_udf_to_csv_converter.py** - Binary .udf file to CSV converter
+- **bme_udf_to_rawdata.py** - Binary .udf file to .bmerawdata JSON converter
+
+The canonical model currently covers **sensor collection data**. It treats the
+board configuration, measurements, labels, and version metadata as one
+collection session. The Excel converter now reads `.bmerawdata` through this
+model while retaining the existing workbook layout.
+
+Collection sessions are validated when read. Validation checks measurement
+columns and basic collection structure. It does not
+reinterpret or second-guess heater profiles, duty-cycle settings, or profile
+references generated and validated by Bosch AI Studio. Invalid input raises
+`SessionValidationError` with all detected structural errors.
+
+### Collection conversion architecture
+
+The collection converters share one normalization pipeline:
+
+```text
+.bmerawdata
+    -> BMERawDataReader
+    -> SessionModel
+    -> Excel / .bmerawdata exporters
+
+collection .udf
+    -> UDFContainerReader
+    -> collection packed-record decoder
+    -> SessionModel
+    -> CSV / Excel / .bmerawdata exporters
+```
+
+`BoardConfigReader` handles both standalone `BoardConfiguration.bmeconfig`
+files and embedded `configHeader`/`configBody` sections. The original Bosch
+configuration dictionaries are retained for lossless serialization, with
+typed views available for application code.
 
 #### Understanding UDF Files
 
@@ -227,7 +252,7 @@ The `.udf` binary data consists of 61-byte packed records with the following fie
 | Offset | Bytes | Field | Type | Description |
 |--------|-------|-------|------|-------------|
 | 0-1 | 2 | Marker | u16 | Record marker (0x00FF) |
-| 2-9 | 8 | Time Since PowerOn | u64 | Milliseconds since power-on |
+| 2-9 | 8 | Time Since PowerOn | u64 | Nanoseconds since power-on (divide by 1,000,000 for ms) |
 | 10-13 | 4 | Real Time Clock | u32 | Unix timestamp (always 0 for BME690 - no RTC) |
 | 12 | 1 | Heater Profile Step | u8 | Profile step index (0-9) |
 | 15-18 | 4 | Gas Resistance | float | Ohms (raw sensor measurement) |
@@ -477,17 +502,49 @@ Parses JSON format files and extracts structured data from `.bmerawdata`, `.bmel
 Processes raw data into pandas DataFrames with proper formatting and data type handling.
 
 ### `bme_excel_writer.py`
-Creates formatted Excel workbooks with styling, multiple sheets, color-coding, and auto-sizing.
+Creates formatted Excel workbooks with styling, multiple sheets, color-coding,
+and auto-sizing. `write_session()` accepts the canonical `SessionModel`.
 
 ### `bme_converter.py`
 Main CLI program that orchestrates the JSON format conversion process.
 
+### `bme_model.py`
+Defines the canonical collection models, including session, board
+configuration, measurements, labels, versions, and typed configuration views.
+
+### `bme_board_config_reader.py`
+Reads standalone `.bmeconfig` files and embedded Bosch configuration sections
+into `BoardConfigModel`.
+
+### `bme_session_reader.py`
+Normalizes `.bmerawdata` files into `SessionModel`, including optional matching
+label information.
+
+### `bme_rawdata_writer.py`
+Serializes a `SessionModel` back to Bosch-compatible `.bmerawdata` JSON while
+preserving source sections and canonical measurement columns.
+
+### `bme_validation.py`
+Performs structural validation when collection sessions are read. It checks
+measurement-column uniqueness and presence, but intentionally does not
+reinterpret Bosch AI Studio's heater, timing, duty-cycle, or profile settings.
+
 ### `bme_udf_to_csv_converter.py`
-Binary UDF file parser and CSV converter. Handles:
-- ASCII metadata parsing (field definitions)
-- Binary data structure detection
-- Record extraction with automatic type inference
-- CSV generation with meaningful column headers
+Collection UDF CSV adapter. It uses the same packed-record decoder as
+`bme_udf_to_rawdata.py`, so CSV and `.bmerawdata` conversion share one source
+of truth for metadata, record boundaries, field offsets, and value decoding.
+
+### `bme_udf_parser.py`
+Compatibility-facing collection UDF adapter for CSV and Excel output. It
+delegates parsing and decoding to `bme_udf_to_rawdata.py`; it does not maintain
+a second binary record implementation.
+
+### UDF parsing boundary
+`bme_udf_container.py` handles only the common UDF envelope: version,
+metadata field definitions, and the opaque binary payload. The collection
+specific packed 61-byte decoder remains in `bme_udf_to_rawdata.py`. Future UDF
+formats, including AI Studio Mobile test results, can reuse the container
+reader without inheriting collection-record assumptions.
 
 ## Technical Details
 
@@ -524,11 +581,16 @@ Key design characteristics:
 These files are essential for complete data interpretation and must be in the same directory as the `.udf` file for auto-detection to work.
 
 ### Data Processing
-- Automatic detection of record boundaries via marker pattern
-- Intelligent type inference based on field metadata
-- Handling of extreme/invalid values
-- Preservation of metadata field mappings
-- Multi-file correlation (binary data + label info + sensor config)
+- Collection record boundaries are detected using the reverse-engineered
+  packed-record layout and marker pattern
+- Collection field offsets and conversions are handled by the dedicated
+  collection decoder
+- UDF metadata and binary payload handling are separated from collection
+  record interpretation
+- Multi-file correlation combines binary data, board configuration, and label
+  information
+- Structural validation reports invalid measurement schemas without modifying
+  Bosch-generated configuration semantics
 
 ## License
 See LICENSE file. 

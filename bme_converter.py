@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 from bme_parser import BMEFileParser
-from bme_processor import BMEDataProcessor
 from bme_excel_writer import BMEExcelWriter
+from bme_session_reader import BMERawDataReader
 
 
 def convert_bme_to_excel(rawdata_path: str, 
@@ -51,67 +51,18 @@ def convert_bme_to_excel(rawdata_path: str,
     if labelinfo_path:
         print(f"Using labels: {Path(labelinfo_path).name}")
     
-    # Parse files
-    parser = BMEFileParser()
-    
     print("Parsing raw data file...")
-    rawdata = parser.parse_rawdata_file(str(rawdata_path))
-    
-    label_lookup = None
-    labels_df = None
-    if labelinfo_path and Path(labelinfo_path).exists():
-        print("Parsing label info file...")
-        labelinfo = parser.parse_labelinfo_file(str(labelinfo_path))
-        label_lookup = BMEDataProcessor.create_label_lookup(labelinfo)
-        labels_df = BMEDataProcessor.create_label_dataframe(labelinfo)
-    
-    # Extract data
+    session = BMERawDataReader().read(str(rawdata_path), labelinfo_path)
+
     print("Processing data...")
-    column_info = parser.extract_column_info(rawdata)
-    data_block = parser.extract_data_block(rawdata)
-    board_type = parser.get_board_type(rawdata)
-    
-    # Process data
-    processor = BMEDataProcessor()
-    
-    # Create data DataFrame
-    data_df = processor.create_dataframe(data_block, column_info, label_lookup)
-    data_df = processor.format_column_by_type(data_df, column_info)
-    
-    # Create configuration DataFrames
-    config_df = processor.create_config_dataframe(rawdata)
-    
-    heater_profiles = parser.get_heater_profiles(rawdata)
-    heater_df = processor.create_heater_profile_dataframe(heater_profiles)
-    
-    duty_profiles = parser.get_duty_cycle_profiles(rawdata)
-    duty_df = processor.create_duty_cycle_dataframe(duty_profiles)
-    
-    sensor_configs = parser.get_sensor_configurations(rawdata)
-    sensor_df = processor.create_sensor_config_dataframe(sensor_configs)
-    
-    # Create Excel workbook
     print(f"Creating Excel file: {output_path}")
     writer = BMEExcelWriter(str(output_path))
-    
-    # Add sheets
-    writer.add_configuration_sheet(
-        config_df, heater_df, duty_df, sensor_df,
-        board_type, rawdata_path.name
-    )
-    
-    if labels_df is not None:
-        writer.add_labels_sheet(labels_df)
-    
-    writer.add_sensor_data_sheet(data_df, column_info)
-    
-    # Save workbook
-    output_file = writer.save()
+    output_file = writer.write_session(session)
     
     print(f"✓ Successfully created: {output_file}")
-    print(f"  - {len(data_df)} data rows")
-    print(f"  - {len(column_info)} columns")
-    print(f"  - Board type: {board_type}")
+    print(f"  - {len(session.measurements.data)} data rows")
+    print(f"  - {len(session.measurements.columns)} columns")
+    print(f"  - Board type: {session.board_config.board_type}")
     
     return output_file
 

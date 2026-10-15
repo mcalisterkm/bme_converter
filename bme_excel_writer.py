@@ -11,6 +11,9 @@ from openpyxl.comments import Comment
 from typing import Dict, Any, Optional
 from pathlib import Path
 
+from bme_model import SessionModel
+from bme_processor import BMEDataProcessor
+
 
 class BMEExcelWriter:
     """Writer for creating Excel workbooks from BME data"""
@@ -40,6 +43,43 @@ class BMEExcelWriter:
         # Remove default sheet
         if 'Sheet' in self.workbook.sheetnames:
             del self.workbook['Sheet']
+
+    def write_session(self, session: SessionModel) -> str:
+        """Write a canonical collection session to an Excel workbook."""
+        processor = BMEDataProcessor()
+        config_df = processor.create_config_dataframe(
+            {"configHeader": session.board_config.header}
+        )
+        heater_df = processor.create_heater_profile_dataframe(
+            session.board_config.heater_profiles
+        )
+        duty_df = processor.create_duty_cycle_dataframe(
+            session.board_config.duty_cycle_profiles
+        )
+        sensor_df = processor.create_sensor_config_dataframe(
+            session.board_config.sensor_configurations
+        )
+
+        self.add_configuration_sheet(
+            config_df,
+            heater_df,
+            duty_df,
+            sensor_df,
+            session.board_config.board_type,
+            session.source_path.name if session.source_path else "session",
+        )
+
+        if session.labels is not None:
+            labels_df = processor.create_label_dataframe(
+                {"labelInformation": session.labels.labels}
+            )
+            self.add_labels_sheet(labels_df)
+
+        self.add_sensor_data_sheet(
+            session.measurements.data,
+            [column.to_dict() for column in session.measurements.columns],
+        )
+        return self.save()
     
     def add_configuration_sheet(self, 
                                config_df: pd.DataFrame,
