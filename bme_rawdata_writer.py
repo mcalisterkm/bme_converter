@@ -13,6 +13,16 @@ from bme_model import SessionModel
 class BMERawDataWriter:
     """Serialize a canonical collection session as Bosch raw data JSON."""
 
+    _DATA_BLOCK_PLACEHOLDER = "@@BME_DATA_BLOCK@@"
+
+    @staticmethod
+    def _compact_rows(rows: Any) -> str:
+        """Readable headers, but one compact line per data row."""
+        if not rows:
+            return "[]"
+        lines = [json.dumps(row, separators=(",", ":")) for row in rows]
+        return "[\n      " + ",\n      ".join(lines) + "\n    ]"
+
     def write(self, session: SessionModel, output_path: str) -> str:
         if not session.raw_document:
             raise ValueError("Session does not contain a source raw-data document")
@@ -25,12 +35,18 @@ class BMERawDataWriter:
         raw_data_body["dataColumns"] = [
             column.to_dict() for column in session.measurements.columns
         ]
-        raw_data_body["dataBlock"] = self._data_block(session)
+        data_block = self._data_block(session)
+        raw_data_body["dataBlock"] = self._DATA_BLOCK_PLACEHOLDER
 
         path = Path(output_path)
         with path.open("w", encoding="utf-8") as output_file:
-            json.dump(document, output_file, indent=2, ensure_ascii=False)
-            output_file.write("\n")
+            text = json.dumps(document, indent=2, ensure_ascii=False)
+            output_file.write(
+                text.replace(
+                    json.dumps(self._DATA_BLOCK_PLACEHOLDER),
+                    self._compact_rows(data_block),
+                )
+            )
         return str(path)
 
     @staticmethod
