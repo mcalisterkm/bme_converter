@@ -171,6 +171,8 @@ The BME690 devkit creates `.udf` files due to limited filesystem space, while th
 1. Convert BME690 `.udf` → `.bmerawdata`
 2. Then convert `.bmerawdata` → Excel using `bme_converter.py`
 
+Being a pure python implementation also means we are not limited to Windows.
+
 **Example workflow:**
 ```bash
 # Step 1: Convert UDF to bmerawdata
