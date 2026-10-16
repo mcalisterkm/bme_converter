@@ -30,7 +30,7 @@ Supports multiple BME file formats:
 ### Binary UDF to CSV Converter (`.udf` to CSV)
 - ✓ Parse `.udf` binary format files with ASCII metadata header
 - ✓ Extract sensor readings from packed binary data
-- ✓ Auto-detect record structure (61-byte records)
+- ✓ Auto-detect record structure (the CSV converter assumes fixed 61-byte records; the `.bmerawdata` and `.aipredictions` converters use the variable-length frame decoder)
 - ✓ Map binary fields to sensor measurement names
 - ✓ Convert to CSV with meaningful column headers
 - ✓ Support for multiple sensors (0-7)
@@ -45,6 +45,22 @@ Supports multiple BME file formats:
 - ✓ Compatible with existing `bme_converter.py` Excel converter
 - ✓ Enables full Excel conversion pipeline for BME690 data
 - ✓ Handles Application Board 3.1/BME690's lack of RTC (all timestamps relative to power-on)
+
+### AI Test UDF to AI Predictions Converter (`.udf` to `.aipredictions`)
+This is a new adddition which converts BME AI Studio Mobile model-test logs.
+There is currently an issue with regression models test data, which we hope will be resolved by Bosch Sensortec.
+
+```bash
+python bme_udf_to_aipredictions.py bsec_690_data_10.udf \
+    -a model.aiconfig -c BoardConfiguration.bmeconfig -o output/
+```
+
+- Needs the `.udf`, the model's `.aiconfig` and a `.bmeconfig`. Each is auto-detected from the `.udf` folder when unambiguous; `-l` selects a `.labelinfo`.
+- Writes `bme_*.aipredictions` (the `.aiconfig`, a run header and one prediction row per sensor per scan cycle) and the `.bmerawdata`; use `--no-rawdata` to skip the latter.
+- Output: `bsec_*.udf` is written as `bme_*`, `seedPowerOnOff` comes from the `.labelinfo` or is generated, and firmware/BSEC versions are read from the `.udf`.
+- Classification models: predictions are the Gas 1-4 estimate fields (ids 22-25); Ground truth is the value of the label field (id 44): the class id selected in AI Studio Mobile (classification) or the selected tag value (regression); 0 means nothing was selected.
+- Regression models: the `.udf` does not log regression outputs, so no `.aipredictions` can be built. Only the `.bmerawdata` is written and the exit code is 2. This is being progressed with Bosch Sensortec, as a bug in the DemoSample application.  
+- The UDF payload is a stream of variable-length frames (`00 FF`, u64 ns timestamp, then `[u16 id][payload]` items sized by the schema), decoded by `bme_udf_frames.py`. A truncated last frame is ignored with a warning. 
 
 ## Installation
 
@@ -166,12 +182,12 @@ python bme_udf_to_rawdata.py bme_690_data_2.udf -v
 
 #### Use Case
 
-The BME690 devkit creates `.udf` files due to limited filesystem space, while the BME688 devkit with SD card stores data directly in `.bmerawdata` format. This converter bridges the gap, allowing the user to:
+The BME690 devkit creates `.udf` files due to limited filesystem space, while the BME688 devkit with an SD card stores data directly in `.bmerawdata` format. This converter bridges the gap, allowing the user to:
 
 1. Convert BME690 `.udf` → `.bmerawdata`
 2. Then convert `.bmerawdata` → Excel using `bme_converter.py`
 
-Being a pure python implementation also means we are not limited to Windows.
+And of course being a pure Python module means it will run on many platforms (Bosch conversion tools are Windows only).
 
 **Example workflow:**
 ```bash
@@ -182,7 +198,7 @@ python bme_udf_to_rawdata.py 690-data.udf
 python bme_converter.py 690-data.bmerawdata
 ```
 
-**Note:** The BME690 devkit (appboard 3.1 + 8x 690 shuttleboard) has no real-time clock, so all timestamps are relative to power-on (Real time clock field = 0).
+**Note:** The BME690 devkit (appboard 3.1 + 8x 690 shuttleboard) has no real-time clock, so all timestamps are relative to power-on (Real time clock field = 0). The BME688 Devkit has an RTC so it gives more usefult timestamps.
 
 ### Python files
  
@@ -242,14 +258,15 @@ UDF (Unit Definition File) format structure:
   - Field ID, name, size, data type, flags
   - Example: `1: Indoor-air-quality estimate: 5: f,u8: sig,acc`
 - **Delimiter**: `\r\n\r\n\r\n` (three CRLF sequences)
-- **Binary data**: Packed sensor readings (61-byte records)
-  - Each record starts with marker bytes (0x00 0xFF at offset 0-1)
+- **Binary data**: Packed sensor readings as variable-length frames
+  - Each frame starts with marker bytes (0x00 0xFF), a u64 nanosecond timestamp, then `[u16 field id][payload]` items whose sizes come from the metadata schema
+  - Measurement frames carry fields 6-9, 26, 40-45; AI classification tests add fields 22-25 once per sensor per scan cycle; the first frame carries device info (50-52)
   - Data encoded as little-endian floats, integers, and types
   - Thousands of timestamped measurements
 
-#### UDF Binary Record Structure (61 Bytes)
+#### UDF Measurement Frame Layout (61 Bytes)
 
-The `.udf` binary data consists of 61-byte packed records with the following field layout (little-endian):
+A typical collection measurement frame is 61 bytes. Frames are not fixed-size in general (AI test frames are longer), so the converters locate fields by id using the schema. Layout of the typical frame (little-endian):
 
 | Offset | Bytes | Field | Type | Description |
 |--------|-------|-------|------|-------------|
@@ -270,12 +287,12 @@ The `.udf` binary data consists of 61-byte packed records with the following fie
 **Data Sources:**
 - **seedPowerOnOff**: Read from `.bmelabelinfo` file's `labelInfoHeader.seedPowerOnOff`
 - **Label Tag**: Read from `.labelinfo` file's label entries (matched by label tag value)
-- **All sensor values**: Extracted directly from binary record at offset positions
+- **All sensor values**: Decoded from the frame's schema-defined fields
 
 The converter automatically:
 1. Parses the metadata to understand field structure
-2. Detects record boundaries (61-byte fixed size)
-3. Extracts all 13 sensor fields at correct offsets
+2. Splits the payload into schema-sized frames (`bme_udf_frames.py`)
+3. Extracts the 13 sensor fields from each complete measurement frame
 4. Maps to meaningful field names (Temperature, Pressure, Gas resistance, etc.)
 5. Loads supplementary data from `.bmelabelinfo` and `.labelinfo` files
 6. Outputs clean `.bmerawdata` JSON with proper column headers
@@ -397,7 +414,7 @@ Version: 1.2
 Metadata: 235 field definitions
 Binary data: 244028 bytes
 First record: 61 bytes
-Subsequent records: 61 bytes
+Subsequent records: 61 bytes (CSV converter only; assumes fixed-size records)
 Extracted 4000 records
 CSV saved: bme_690_data_2.csv
 Done! 4000 records converted.
@@ -440,6 +457,8 @@ Heater profiles define temperature steps and durations. The converter automatica
   - Example: `[70, 64]` means 70°C for 64 × 140ms = 8960ms = 8.96 seconds
 
 Available profiles in AI Studio: HP-323, HP-324, HP-331, HP-332, HP-354, HP-411, HP-412, HP-413, HP-414, HP-501, HP-502, HP-503, HP-504
+
+The Bosch Sensortech example code often switches between units (of 140ms) and absolute millisecond values, which can be confusing. 
 
 ## Understanding Duty Cycles
 
@@ -543,10 +562,10 @@ a second binary record implementation.
 
 ### UDF parsing boundary
 `bme_udf_container.py` handles only the common UDF envelope: version,
-metadata field definitions, and the opaque binary payload. The collection
-specific packed 61-byte decoder remains in `bme_udf_to_rawdata.py`. Future UDF
-formats, including AI Studio Mobile test results, can reuse the container
-reader without inheriting collection-record assumptions.
+metadata field definitions, and the opaque binary payload. `bme_udf_frames.py`
+splits that payload into frames using the schema, and `bme_udf_to_rawdata.py`
+and `bme_ai_predictions.py` build collection rows and AI predictions from them.
+The 61-byte table above describes a typical collection measurement frame.
 
 ## Technical Details
 
@@ -557,13 +576,13 @@ reader without inheriting collection-record assumptions.
   - `s8`, `s16`, `s32`: Signed integers (1, 2, 4 bytes)
   - `f`: IEEE 754 single-precision float (4 bytes)
   - Compound types (e.g., `f,u8`): Float + accuracy byte
-- **Record structure**: Fixed 61-byte records
-- **Record markers**: Start with 0x00FF (marker bytes at offset 0-1)
+- **Frame structure**: Variable-length frames; item sizes come from the metadata schema (the UDF to CSV converter still assumes fixed 61-byte records)
+- **Frame markers**: Start with 0x00FF (marker bytes at offset 0-1)
 - **Time encoding**: Nanoseconds (u64 at offset 2), divide by 1,000,000 for milliseconds
 
-### 61-Byte UDF Record Layout
+### Typical Measurement Frame Layout
 
-See [UDF Binary Record Structure table](#udf-binary-record-structure-61-bytes) above for complete field mappings and offsets.
+See [UDF Measurement Frame Layout table](#udf-measurement-frame-layout-61-bytes) above for complete field mappings and offsets.
 
 Key design characteristics:
 - **Packed format**: No alignment padding between fields
